@@ -21,7 +21,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -181,7 +182,7 @@ a:hover {
 }
 
 .dashboard-layout {
-  max-width: 1100px;
+  max-width: 1440px;
   margin: 0 auto;
 }
 
@@ -211,18 +212,190 @@ a:hover {
   font-size: 12px;
 }
 
-.welcome-panel {
-  width: min(100%, 680px);
-  margin: 96px auto;
-  padding: 42px;
-  border: 1px solid #e8eaf0;
-  border-radius: 18px;
-  background: white;
-  box-shadow: 0 18px 50px rgb(34 48 87 / 6%);
+.account-actions {
+  display: flex;
+  align-items: center;
+  gap: 18px;
 }
 
-.welcome-panel .eyebrow {
-  margin-top: 0;
+.account-email {
+  color: #737b8e;
+  font-size: 13px;
+}
+
+.analytics-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 24px;
+  margin: 42px 0 24px;
+}
+
+.analytics-heading .eyebrow {
+  margin: 0 0 10px;
+}
+
+.analytics-heading .subtitle {
+  margin: 9px 0 0;
+}
+
+.date-range {
+  display: flex;
+  gap: 12px;
+}
+
+.date-range label,
+.filter-bar label {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+}
+
+.date-range label span,
+.filter-bar label span {
+  color: #687184;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.date-range input,
+.filter-bar select {
+  min-height: 40px;
+  padding: 8px 10px;
+  border-color: #e1e5ed;
+  border-radius: 8px;
+  color: #343c4f;
+  font-size: 13px;
+}
+
+.date-range input {
+  width: 150px;
+}
+
+.filter-bar {
+  display: flex;
+  align-items: end;
+  gap: 14px;
+  padding: 15px 17px;
+  border: 1px solid #e8eaf0;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.filter-bar select {
+  min-width: 205px;
+  background-color: #fff;
+}
+
+.data-note {
+  margin: 0 0 10px auto;
+  color: #7b8291;
+  font-size: 12px;
+}
+
+.dashboard-error,
+.loading-note {
+  margin: 18px 2px;
+}
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  margin: 20px 0;
+}
+
+.metric-card {
+  min-height: 132px;
+  padding: 20px;
+  border: 1px solid #e8eaf0;
+  border-radius: 13px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgb(34 48 87 / 3%);
+}
+
+.metric-card p {
+  margin: 0 0 12px;
+  color: #737b8e;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.metric-card strong {
+  display: block;
+  color: #222a3d;
+  font-family: "Avenir Next", Avenir, "Segoe UI", sans-serif;
+  font-size: clamp(23px, 3vw, 30px);
+  font-weight: 750;
+  letter-spacing: -0.04em;
+}
+
+.metric-card span {
+  display: block;
+  margin-top: 8px;
+  color: #9097a6;
+  font-size: 11px;
+}
+
+.chart-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(360px, 0.9fr);
+  gap: 16px;
+  padding-bottom: 24px;
+}
+
+.chart-card {
+  min-width: 0;
+  padding: 21px 20px 14px;
+  border: 1px solid #e8eaf0;
+  border-radius: 13px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgb(34 48 87 / 3%);
+}
+
+.chart-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  min-height: 53px;
+}
+
+.chart-heading h2,
+.empty-state h2 {
+  margin: 0;
+  color: #252c3c;
+  font-family: "Avenir Next", Avenir, "Segoe UI", sans-serif;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.chart-heading p,
+.empty-state p {
+  margin: 6px 0 0;
+  color: #858da0;
+  font-size: 12px;
+}
+
+.chart-wrap {
+  width: 100%;
+  height: 300px;
+  margin-top: 8px;
+}
+
+.product-chart-card .chart-wrap {
+  height: 300px;
+}
+
+.chart-accessible-summary {
+  margin: 8px 0 0;
+  color: #858da0;
+  font-size: 11px;
+}
+
+.empty-state {
+  margin-top: 20px;
+  padding: 32px;
+  text-align: center;
 }
 
 .success-message,
@@ -241,12 +414,66 @@ a:hover {
     padding: 18px;
   }
 
-  .auth-card,
-  .welcome-panel {
+  .auth-card {
     padding: 28px 22px;
   }
 
-  .welcome-panel {
-    margin-top: 56px;
+  .analytics-heading {
+    align-items: start;
+    flex-direction: column;
+    margin-top: 28px;
+  }
+
+  .date-range {
+    width: 100%;
+  }
+
+  .date-range label {
+    flex: 1;
+  }
+
+  .date-range input {
+    width: 100%;
+  }
+
+  .filter-bar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .filter-bar select {
+    width: 100%;
+  }
+
+  .data-note {
+    margin: 2px 0 0;
+  }
+
+  .metric-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .metric-card {
+    min-height: 120px;
+    padding: 15px;
+  }
+
+  .chart-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .account-email {
+    display: none;
+  }
+
+  .chart-wrap {
+    height: 270px;
+  }
+}
+
+@media (max-width: 380px) {
+  .metric-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

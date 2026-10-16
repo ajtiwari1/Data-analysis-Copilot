@@ -88,7 +88,17 @@ For local development with Vite, set `FRONTEND_ORIGIN=http://localhost:5173`; Co
 
 Passwords must be 12–128 characters. The API stores a SHA-256 digest of each random session token in PostgreSQL; only the raw token is sent in an HTTP-only, SameSite=Lax cookie.
 
-Run `alembic -c middleware/alembic.ini upgrade head` after pulling schema changes. Expired sessions can be removed periodically with `python -m middleware.maintenance`; schedule this command as a daily job in deployments.
+## Sales analytics and demo data
+
+Registration writes two example sites, eight products, and 90 days of deterministic order-level sales records to PostgreSQL in the same transaction as the new account and session. The dashboard reads these records through protected APIs; demo charts are not hard-coded in the browser.
+
+- `GET /api/analytics/sites` lists the signed-in user's sites.
+- `GET /api/analytics/products?site_id=<id>` lists that user's products, optionally scoped to one owned site.
+- `GET /api/analytics/overview` returns revenue, distinct orders, units sold, daily sales, and product sales. It accepts optional `site_id`, `product_id`, `start_date`, and `end_date` filters (ISO dates). Dates default to the most recent 30 days.
+
+Revenue means gross sales minus discounts; refunds are not modeled. Each daily record is one order/product line; order counts are distinct within a site. Combined revenue across sites is only returned when their currencies match. All included demo sites use USD.
+
+Apply database migrations after pulling schema changes with `alembic -c middleware/alembic.ini upgrade head`. To insert missing demo records for existing accounts, run `python -m middleware.seed_demo --all-users`, or target one account with `python -m middleware.seed_demo --email user@example.com`. The command is idempotent and runs locally/admin-side; there is no public seed endpoint. Expired sessions can be removed periodically with `python -m middleware.maintenance`; schedule this command as a daily job in deployments.
 
 ## Tests
 
