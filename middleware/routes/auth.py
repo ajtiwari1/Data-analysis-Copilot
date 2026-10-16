@@ -12,6 +12,7 @@ from middleware.dependencies import (
 from middleware.models import AuthSession, User
 from middleware.schemas import Credentials, UserResponse
 from middleware.security import hash_password, hash_session_token, verify_password
+from middleware.services.demo_data import seed_demo_data
 
 router = APIRouter(prefix="/auth")
 
@@ -33,6 +34,7 @@ def register(
     db.add(user)
     try:
         db.flush()
+        seed_demo_data(db, user)
         issue_session(response, user, db)
     except IntegrityError as error:
         db.rollback()

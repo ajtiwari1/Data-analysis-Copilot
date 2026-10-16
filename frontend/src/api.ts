@@ -9,6 +9,51 @@ export interface Dashboard {
   user: User;
 }
 
+export interface Site {
+  id: number;
+  name: string;
+  url: string;
+  currency: string;
+  is_demo: boolean;
+}
+
+export interface Product {
+  id: number;
+  site_id: number;
+  name: string;
+  sku: string;
+  category: string;
+  unit_price: string;
+}
+
+export interface DailySales {
+  date: string;
+  revenue: number;
+  orders: number;
+  units_sold: number;
+}
+
+export interface ProductSales {
+  product_id: number;
+  name: string;
+  sku: string;
+  revenue: number;
+  orders: number;
+  units_sold: number;
+}
+
+export interface AnalyticsOverview {
+  start_date: string;
+  end_date: string;
+  currency: string;
+  revenue: number;
+  orders: number;
+  units_sold: number;
+  average_order_value: number;
+  daily_sales: DailySales[];
+  product_sales: ProductSales[];
+}
+
 export class ApiError extends Error {
   constructor(
     message: string,
