@@ -12,6 +12,7 @@ Backend code lives in `middleware/`:
 - `migrations/` contains Alembic configuration and schema revisions.
 - `main.py` creates the FastAPI application and registers the combined API router.
 - `schemas.py`, `dependencies.py`, `security.py`, and `config.py` hold shared API schemas, request dependencies, auth helpers, and settings.
+- The repository-root `chat/` package contains chat models, routes, analytics tools, the constrained SQL agent, and provider-neutral LLM utilities. Middleware registers the chat router and supplies shared authentication and database dependencies.
 
 ## Run the full stack with Docker Compose
 
@@ -75,6 +76,14 @@ The root `.env` configures PostgreSQL, the API, and published ports:
 | `DATABASE_URL` | Optional SQLAlchemy URL override; otherwise the API derives the URL from `POSTGRES_*` | Derived from the PostgreSQL settings |
 | `SESSION_COOKIE_SECURE` | Require HTTPS for the session cookie | `false` in `.env.example`; set `true` in production |
 | `FRONTEND_ORIGIN` | Allowed frontend origin for credentialed API requests | `http://localhost:5173` |
+| `CHAT_LLM_PROVIDER` | LLM backend: `openai`, `anthropic`, `gemini`, or `ollama` | `openai` |
+| `CHAT_LLM_MODEL` | Optional provider-specific model override | Provider default |
+| `CHAT_LLM_BASE_URL` | Optional provider API base URL override | Provider default |
+| `CHAT_LLM_TIMEOUT_SECONDS` | Provider request timeout | `30` |
+| `CHAT_LLM_MAX_TOKENS` | Maximum provider output tokens | `800` |
+| `CHAT_OPENAI_API_KEY` | OpenAI API key (only needed for OpenAI) | Empty |
+| `CHAT_ANTHROPIC_API_KEY` | Anthropic API key (only needed for Anthropic) | Empty |
+| `CHAT_GEMINI_API_KEY` | Google Gemini API key (only needed for Gemini) | Empty |
 
 For local development with Vite, set `FRONTEND_ORIGIN=http://localhost:5173`; Compose serves the frontend at `http://localhost:8080` by default. For a frontend deployed on a separate origin within the same site, set `VITE_API_BASE_URL` in the frontend's Vite environment to the API origin and configure `FRONTEND_ORIGIN` to the exact frontend origin. This setup uses `SameSite=Lax` cookies; cross-site frontend/API deployments need additional CSRF protection and `SameSite=None` support, which are not implemented yet. Production must use HTTPS and `SESSION_COOKIE_SECURE=true`.
 
@@ -97,6 +106,36 @@ Registration writes two example sites, eight products, and 90 days of determinis
 - `GET /api/analytics/overview` returns revenue, distinct orders, units sold, daily sales, and product sales. It accepts optional `site_id`, `product_id`, `start_date`, and `end_date` filters (ISO dates). Dates default to the most recent 30 days.
 
 Revenue means gross sales minus discounts; refunds are not modeled. Each daily record is one order/product line; order counts are distinct within a site. Combined revenue across sites is only returned when their currencies match. All included demo sites use USD.
+
+## Chat assistant
+
+Chat messages are exchanged through the authenticated WebSocket at
+`/api/chat/conversations/{id}/ws`. Conversation list/create, paginated message history,
+and deletion use `/api/chat/conversations`. Apply the chat schema with
+`alembic -c middleware/alembic.ini upgrade head`. Send
+`{type: "message", request_id: "<uuid>", content: "...", filters: {...}}`; responses are
+`assistant.delta` chunks followed by `assistant.done`, or a structured `error` event. The
+client request ID makes completed retries idempotent.
+
+Set `CHAT_LLM_PROVIDER` to `openai`, `anthropic`, `gemini`, or `ollama`. Provider API keys
+remain server-side in `.env`; Ollama defaults to `http://localhost:11434` and does not need
+an API key. Default models are `gpt-4o-mini`, `claude-3-5-haiku-latest`,
+`gemini-2.0-flash`, and `llama3.2`, respectively. The SQL agent only classifies a question
+into a fixed analytics operation. Queries are built by application code using authenticated
+user scope and SQLAlchemy expressions; the model cannot issue SQL.
+Message sends are limited to 10 per user per minute, enforced through the database across
+API workers. Provider calls time out after 30 seconds by default, and output is bounded by
+`CHAT_LLM_MAX_TOKENS` (800 by default). Provider calls are not automatically retried; use the
+client retry action, which is idempotent for completed requests. Provider cost varies by
+selected model; request and token limits bound usage but do not replace provider-side spending
+limits or budget alerts in production.
+
+Chat messages and the selected analytics filters are stored in PostgreSQL until the user
+deletes the conversation. There is no automatic retention expiry yet. For hosted providers,
+only the user's question is sent for operation classification; site/product/date filters and
+query results remain on the backend, and answers are formatted from those local query results.
+Provider-side handling and retention for the question are governed by that provider's terms.
+Ollama runs against the configured local server.
 
 Apply database migrations after pulling schema changes with `alembic -c middleware/alembic.ini upgrade head`. To insert missing demo records for existing accounts, run `python -m middleware.seed_demo --all-users`, or target one account with `python -m middleware.seed_demo --email user@example.com`. The command is idempotent and runs locally/admin-side; there is no public seed endpoint. Expired sessions can be removed periodically with `python -m middleware.maintenance`; schedule this command as a daily job in deployments.
 
