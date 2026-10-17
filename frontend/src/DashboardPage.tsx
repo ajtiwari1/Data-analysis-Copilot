@@ -19,6 +19,7 @@ import {
   type Site,
 } from "./api";
 import { useAuth } from "./auth";
+import { ChatPanel } from "./ChatPanel";
 
 function toIsoDate(date: Date): string {
   const year = date.getFullYear();
@@ -411,6 +412,15 @@ export function DashboardPage() {
           )}
         </>
       )}
+
+      <ChatPanel
+        filters={{
+          site_id: siteId ? Number(siteId) : null,
+          product_id: productId ? Number(productId) : null,
+          start_date: startDate,
+          end_date: endDate,
+        }}
+      />
     </main>
   );
 }

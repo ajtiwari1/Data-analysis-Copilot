@@ -54,6 +54,37 @@ export interface AnalyticsOverview {
   product_sales: ProductSales[];
 }
 
+export interface ChatConversation {
+  id: number;
+  title: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChatMessage {
+  id: number;
+  request_id: string;
+  role: "user" | "assistant";
+  content: string;
+  metadata_json: Record<string, unknown> | null;
+  created_at: string;
+}
+
+export interface ChatFilters {
+  site_id: number | null;
+  product_id: number | null;
+  start_date: string;
+  end_date: string;
+}
+
+export interface ChatSocketEvent {
+  type: "assistant.delta" | "assistant.done" | "error";
+  request_id: string;
+  content?: string;
+  code?: string;
+  message?: string;
+}
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -65,6 +96,14 @@ export class ApiError extends Error {
 }
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "";
+
+export function websocketUrl(path: string): string {
+  const url = new URL(apiBaseUrl || window.location.origin, window.location.origin);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.pathname = path;
+  url.search = "";
+  return url.toString();
+}
 
 export async function request<T>(
   path: string,
@@ -82,7 +121,7 @@ export async function request<T>(
       headers,
     });
   } catch {
-    throw new ApiError("Unable to connect to the authentication service.", 0);
+    throw new ApiError("Unable to connect to the server.", 0);
   }
 
   if (!response.ok) {

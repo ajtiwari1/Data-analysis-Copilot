@@ -17,6 +17,14 @@ class Settings(BaseSettings):
     session_ttl_seconds: int = Field(default=60 * 60 * 24 * 30, gt=0)
     session_cookie_secure: bool = True
     frontend_origin: str = "http://localhost:5173"
+    chat_llm_provider: str = "openai"
+    chat_llm_model: str = ""
+    chat_llm_base_url: str = ""
+    chat_llm_timeout_seconds: float = Field(default=30, gt=0, le=120)
+    chat_llm_max_tokens: int = Field(default=800, gt=0, le=4096)
+    chat_openai_api_key: str = Field(default="", repr=False)
+    chat_anthropic_api_key: str = Field(default="", repr=False)
+    chat_gemini_api_key: str = Field(default="", repr=False)
 
     model_config = SettingsConfigDict(
         env_file=PROJECT_ROOT / ".env",

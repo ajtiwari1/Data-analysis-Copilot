@@ -6,6 +6,7 @@ from sqlalchemy import engine_from_config, pool
 from middleware.config import settings
 from middleware.database import Base
 from middleware import models  # noqa: F401
+from chat import models as chat_models  # noqa: F401
 
 config = context.config
 config.set_main_option(
