@@ -1,5 +1,6 @@
 import asyncio
 from datetime import date, timedelta
+import json
 import os
 from uuid import uuid4
 
@@ -11,6 +12,10 @@ from sqlalchemy.pool import StaticPool
 
 from chat.models import ChatConversation, ChatMessage
 from chat.agents.sql_agent import SQLAgent, SQLAgentError
+from chat.agents.sql_agent.mcp_server import create_sql_agent_mcp_server
+from chat.agents.sql_agent.query_executor import (
+    validate_and_scope_sql,
+)
 from chat.schemas import ChatFilters
 from chat.services.analytics import run_analytics_tool
 from chat.utils.llm_factory import (
@@ -22,6 +27,7 @@ from middleware.config import settings
 from middleware.database import Base, get_db
 from middleware.main import app
 from middleware.models import AuthSession, User
+from mcp.shared.memory import create_connected_server_and_client_session
 
 
 @pytest.fixture
@@ -113,11 +119,23 @@ def test_chat_websocket_persists_messages_and_uses_grounded_data(
 
     class FakeLLM:
         async def complete(self, messages: list[dict[str, str]]) -> str:
-            assert "Never return SQL" in messages[0]["content"]
-            fake_calls.append(True)
-            return '{"operation":"overview","metric":"revenue"}'
+            if "generate one read-only PostgreSQL SELECT" in messages[0]["content"]:
+                assert "sales_records" in messages[0]["content"]
+                assert "sql_agent_bench" not in messages[0]["content"]
+                fake_calls.append("sql")
+                return (
+                    '{"sql":"SELECT SUM(sales_records.gross_revenue - '
+                    'sales_records.discount) AS net_revenue FROM sales_records '
+                    'JOIN sites ON sales_records.site_id = sites.id",'
+                    '"clarification":null}'
+                )
+            assert "Summarize the supplied SQL result" in messages[0]["content"]
+            result_data = json.loads(messages[1]["content"])
+            assert result_data["rows"][0]["net_revenue"] == expected_revenue
+            fake_calls.append("summary")
+            return f"Net revenue for the selected period was {expected_revenue:,.2f}."
 
-    fake_calls: list[bool] = []
+    fake_calls: list[str] = []
     monkeypatch.setattr("chat.routes.chat._client", FakeLLM)
     request_id = str(uuid4())
     today = date.today()
@@ -190,9 +208,8 @@ def test_chat_websocket_persists_messages_and_uses_grounded_data(
     answer_events = [event for event in events if event["type"] == "assistant.delta"]
     answer = "".join(event["content"] for event in answer_events)
     assert answer_events
-    assert "net revenue was" in answer
+    assert "net revenue for the selected period was" in answer.lower()
     assert f"{expected_revenue:,.2f}" in answer
-    assert "average order value was" in answer
     assert events[-1] == {"type": "assistant.done", "request_id": request_id}
     assert "".join(
         event.get("content", "")
@@ -200,11 +217,12 @@ def test_chat_websocket_persists_messages_and_uses_grounded_data(
         if event["type"] == "assistant.delta"
     ) == answer
     assert conflict["code"] == "request_id_conflict"
-    assert len(fake_calls) == 1
+    assert fake_calls == ["sql", "summary"]
     history = client.get(
         f"/api/chat/conversations/{conversation_id}/messages"
     ).json()
     assert [item["role"] for item in history] == ["user", "assistant"]
+    assert history[1]["metadata_json"]["rows"][0]["net_revenue"] == expected_revenue
     assert history[0]["request_id"] == request_id
     latest_page = client.get(
         f"/api/chat/conversations/{conversation_id}/messages?limit=1"
@@ -368,13 +386,13 @@ def test_llm_factory_reports_missing_credentials_and_unknown_provider():
         )
 
 
-def test_sql_agent_rejects_model_authored_sql(chat_client):
+def test_sql_agent_rejects_unsafe_model_generated_sql(chat_client):
     client, session_factory = chat_client
     user_id = register(client, "chat-agent-security@example.com")
 
     class MaliciousLLM:
         async def complete(self, _messages: list[dict[str, str]]) -> str:
-            return '{"operation":"sql","query":"DROP TABLE users"}'
+            return '{"sql":"DROP TABLE users","clarification":null}'
 
     with session_factory() as db:
         user = db.get(User, user_id)
@@ -383,10 +401,192 @@ def test_sql_agent_rejects_model_authored_sql(chat_client):
             start_date=date.today() - timedelta(days=1),
             end_date=date.today(),
         )
-        with pytest.raises(SQLAgentError, match="invalid query plan"):
+        with pytest.raises(SQLAgentError, match="read-only analytics safety checks"):
             asyncio.run(
                 SQLAgent(MaliciousLLM()).answer(db, user, "delete all data", filters)
             )
+
+
+def test_sql_agent_executes_generated_aggregate_and_summarizes(chat_client):
+    client, session_factory = chat_client
+    user_id = register(client, "chat-agent-average-order-value@example.com")
+
+    class AverageOrderValueLLM:
+        calls = 0
+
+        async def complete(self, messages: list[dict[str, str]]) -> str:
+            self.calls += 1
+            if self.calls == 1:
+                return (
+                    '{"sql":"SELECT AVG(sales_records.gross_revenue - '
+                    'sales_records.discount) AS average_order_value FROM sales_records '
+                    'JOIN sites ON sales_records.site_id = sites.id",'
+                    '"clarification":null}'
+                )
+            summary_request = json.loads(messages[1]["content"])
+            assert summary_request["row_count"] == 1
+            return "The average order value for the selected period is summarized."
+
+    llm = AverageOrderValueLLM()
+    with session_factory() as db:
+        user = db.get(User, user_id)
+        assert user is not None
+        filters = ChatFilters(
+            start_date=date.today() - timedelta(days=1),
+            end_date=date.today(),
+        )
+        answer, result = asyncio.run(
+            SQLAgent(llm).answer(
+                db, user, "What was my average order value?", filters
+            )
+        )
+
+    assert result["columns"] == ["average_order_value"]
+    assert result["row_count"] == 1
+    assert "average order value" in answer
+
+
+def test_sql_agent_retries_invalid_model_format(chat_client):
+    client, session_factory = chat_client
+    user_id = register(client, "chat-agent-format-retry@example.com")
+
+    class RetryingLLM:
+        calls = 0
+
+        async def complete(self, _messages: list[dict[str, str]]) -> str:
+            self.calls += 1
+            if self.calls == 1:
+                return "I will calculate that for you."
+            if self.calls == 2:
+                return (
+                    '{"sql":"SELECT COUNT(*) AS order_count FROM sales_records '
+                    'JOIN sites ON sales_records.site_id = sites.id",'
+                    '"clarification":null}'
+                )
+            return "There are sales records in the selected period."
+
+    llm = RetryingLLM()
+    with session_factory() as db:
+        user = db.get(User, user_id)
+        assert user is not None
+        filters = ChatFilters(
+            start_date=date.today() - timedelta(days=1),
+            end_date=date.today(),
+        )
+        answer, result = asyncio.run(
+            SQLAgent(llm).answer(db, user, "How many orders?", filters)
+        )
+
+    assert llm.calls == 3
+    assert result["columns"] == ["order_count"]
+    assert "sales records" in answer
+
+
+def test_sql_agent_mcp_tools_scope_query_to_user_and_dashboard_filters(chat_client):
+    client, session_factory = chat_client
+    first_user_id = register(client, "chat-sql-scope-first@example.com")
+    first_site_id = client.get("/api/analytics/sites").json()[0]["id"]
+    register(client, "chat-sql-scope-second@example.com")
+
+    filters = ChatFilters(
+        site_id=first_site_id,
+        product_id=None,
+        start_date=date.today() - timedelta(days=2),
+        end_date=date.today(),
+    )
+    query = (
+        "SELECT COUNT(*) AS order_count FROM sales_records "
+        "JOIN sites ON sales_records.site_id = sites.id"
+    )
+    with session_factory() as db:
+        first_user = db.get(User, first_user_id)
+        assert first_user is not None
+        server = create_sql_agent_mcp_server(db, first_user, filters)
+        async def invoke_tools():
+            async with create_connected_server_and_client_session(
+                server, raise_exceptions=True
+            ) as mcp_client:
+                tools = await mcp_client.list_tools()
+                assert {tool.name for tool in tools.tools} == {
+                    "get_sales_schema",
+                    "execute_readonly_sql",
+                }
+                schema = await mcp_client.call_tool("get_sales_schema", {})
+                assert not schema.isError
+                assert "sales_records" in schema.structuredContent["schema"]
+                assert "sql_agent_bench" not in schema.structuredContent["schema"]
+                return await mcp_client.call_tool(
+                    "execute_readonly_sql", {"sql": query}
+                )
+
+        mcp_result = asyncio.run(invoke_tools())
+        assert not mcp_result.isError
+        result = mcp_result.structuredContent
+        assert result is not None
+        assert result["row_count"] == 1
+        assert result["filters"]["site_id"] == first_site_id
+        assert result["rows"][0]["order_count"] > 0
+
+
+def test_generated_sql_cannot_or_around_injected_scope():
+    filters = ChatFilters(
+        start_date=date.today() - timedelta(days=1),
+        end_date=date.today(),
+    )
+    query = (
+        "SELECT COUNT(*) AS record_count FROM sales_records "
+        "JOIN sites ON sales_records.site_id = sites.id "
+        "WHERE sites.name = 'first' OR sites.name = 'second'"
+    )
+    safe_sql, _ = validate_and_scope_sql(query, filters)
+    assert (
+        "(sites.user_id = :authenticated_user_id AND "
+        "sales_records.site_id = sites.id AND "
+        "sales_records.sale_date >= :start_date AND "
+        "sales_records.sale_date <= :end_date) AND "
+        "(sites.name = 'first' OR sites.name = 'second')"
+    ) in safe_sql
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "DELETE FROM sales_records",
+        "SELECT * FROM sales_records JOIN sites ON sales_records.site_id = sites.id",
+        "SELECT users.email FROM users JOIN sites ON users.id = sites.user_id",
+        "SELECT sales_records.gross_revenue FROM sales_records",
+        (
+            "WITH scoped_sales AS (SELECT sales_records.id FROM sales_records) "
+            "SELECT COUNT(*) FROM scoped_sales JOIN sites ON true"
+        ),
+        (
+            "SELECT COUNT(*) FROM sales_records AS sr "
+            "JOIN sites ON sr.site_id = sites.id"
+        ),
+        (
+            "SELECT pg_sleep(10) AS delayed FROM sales_records "
+            "JOIN sites ON sales_records.site_id = sites.id"
+        ),
+        (
+            "SELECT COUNT(*) FROM sales_records "
+            "JOIN sites ON sales_records.site_id = sites.id "
+            "WHERE pg_sleep(10) IS NULL"
+        ),
+        (
+            "SELECT COUNT(*) FROM sales_records "
+            "JOIN sites ON sales_records.site_id = sites.id -- trailing comment"
+        ),
+        (
+            "SELECT COUNT(*) FROM sales_records "
+            "JOIN sites ON sales_records.site_id = sites.id; DELETE FROM sites"
+        ),
+    ],
+)
+def test_generated_sql_rejects_unsafe_shapes(query: str):
+    today = date.today()
+    filters = ChatFilters(start_date=today, end_date=today)
+    with pytest.raises(SQLAgentError, match="read-only analytics safety checks"):
+        validate_and_scope_sql(query, filters)
 
 
 def test_provider_configuration_failures_are_explicit(
@@ -431,7 +631,7 @@ def test_websocket_rate_limit_counts_messages_across_requests(
 
     class ClarifyingLLM:
         async def complete(self, _messages: list[dict[str, str]]) -> str:
-            return '{"operation":"clarify","clarification":"Please ask about sales analytics."}'
+            return '{"sql":null,"clarification":"Please ask about sales analytics."}'
 
     monkeypatch.setattr("chat.routes.chat._client", ClarifyingLLM)
     today = date.today().isoformat()
