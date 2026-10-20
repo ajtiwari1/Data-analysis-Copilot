@@ -12,7 +12,7 @@ Backend code lives in `middleware/`:
 - `migrations/` contains Alembic configuration and schema revisions.
 - `main.py` creates the FastAPI application and registers the combined API router.
 - `schemas.py`, `dependencies.py`, `security.py`, and `config.py` hold shared API schemas, request dependencies, auth helpers, and settings.
-- The repository-root `chat/` package contains chat models, routes, analytics tools, the constrained SQL agent, and provider-neutral LLM utilities. Middleware registers the chat router and supplies shared authentication and database dependencies.
+- The repository-root `chat/` package contains chat models, routes, analytics tools, the validated read-only SQL agent, and provider-neutral LLM utilities. Middleware registers the chat router and supplies shared authentication and database dependencies.
 
 ## Run the full stack with Docker Compose
 
@@ -120,9 +120,14 @@ client request ID makes completed retries idempotent.
 Set `CHAT_LLM_PROVIDER` to `openai`, `anthropic`, `gemini`, or `ollama`. Provider API keys
 remain server-side in `.env`; Ollama defaults to `http://localhost:11434` and does not need
 an API key. Default models are `gpt-4o-mini`, `claude-3-5-haiku-latest`,
-`gemini-2.0-flash`, and `llama3.2`, respectively. The SQL agent only classifies a question
-into a fixed analytics operation. Queries are built by application code using authenticated
-user scope and SQLAlchemy expressions; the model cannot issue SQL.
+`gemini-2.0-flash`, and `llama3.2`, respectively. The SQL agent asks the LLM to generate a
+PostgreSQL `SELECT` query, then calls a request-scoped MCP tool to validate it against an
+allow-list of sales tables, columns, and functions, inject authenticated-user and
+dashboard-filter predicates, and run it with bounded results. Schema discovery also uses an
+MCP tool. Writes, multiple statements, unknown identifiers, subqueries, and other unsafe
+query shapes are rejected. The LLM then summarizes only the bounded query results. MCP
+calls currently use the SDK's in-memory transport inside the API process; there is no
+unauthenticated remote MCP endpoint.
 Message sends are limited to 10 per user per minute, enforced through the database across
 API workers. Provider calls time out after 30 seconds by default, and output is bounded by
 `CHAT_LLM_MAX_TOKENS` (800 by default). Provider calls are not automatically retried; use the
@@ -130,14 +135,33 @@ client retry action, which is idempotent for completed requests. Provider cost v
 selected model; request and token limits bound usage but do not replace provider-side spending
 limits or budget alerts in production.
 
-Chat messages and the selected analytics filters are stored in PostgreSQL until the user
-deletes the conversation. There is no automatic retention expiry yet. For hosted providers,
-only the user's question is sent for operation classification; site/product/date filters and
-query results remain on the backend, and answers are formatted from those local query results.
-Provider-side handling and retention for the question are governed by that provider's terms.
-Ollama runs against the configured local server.
+Chat messages, selected analytics filters, and bounded query-result rows in assistant message
+metadata are stored in PostgreSQL until the user deletes the conversation. There is no
+automatic retention expiry yet. For hosted providers, the user's question is sent for SQL
+generation, and bounded rows returned by the scoped query are sent for summarization. The
+database credentials, generated SQL execution, and filter enforcement remain on the backend.
+Provider-side handling and retention for questions and summarized result data are governed
+by that provider's terms. Ollama runs against the configured local server.
 
 Apply database migrations after pulling schema changes with `alembic -c middleware/alembic.ini upgrade head`. To insert missing demo records for existing accounts, run `python -m middleware.seed_demo --all-users`, or target one account with `python -m middleware.seed_demo --email user@example.com`. The command is idempotent and runs locally/admin-side; there is no public seed endpoint. Expired sessions can be removed periodically with `python -m middleware.maintenance`; schedule this command as a daily job in deployments.
+
+To create a synthetic SQL-agent benchmark with 1,000 tables in a separate PostgreSQL
+schema, set `SQL_AGENT_BENCH_DATABASE_URL` to a dedicated development/test database URL,
+then run:
+
+```sh
+python -m chat.agents.sql_agent.data_generation.seed_postgres
+```
+
+The generator creates the `sql_agent_bench` schema with exactly 1,000 tables and 25
+deterministic synthetic rows per table by default. Use `--tables`, `--rows-per-table`, and
+`--seed` to customize the profile; total generated rows are capped at 1,000,000. It does
+not use the application's `DATABASE_URL`, touch production Alembic migrations, or copy
+customer data. If the benchmark schema already exists, the command stops unless `--reset`
+is supplied; `--reset` replaces only `sql_agent_bench`, while `--drop` removes only that
+schema. Back up important databases before using either destructive option. The current
+SQL-agent executor remains allow-listed to the application's sales tables; this benchmark
+generator does not itself enable agent queries against the synthetic tables.
 
 ## Tests
 
